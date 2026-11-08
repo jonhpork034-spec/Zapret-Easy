@@ -111,6 +111,73 @@ class AutoBestBackupTests(unittest.TestCase):
                 "old-conf",
             )
 
+    def test_keep_existing_protects_previous_backup(self) -> None:
+        """Повторная запись с keep_existing не затирает рабочий бэкап."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            directory = Path(temp_dir)
+            _write_pair(
+                directory,
+                "working-conf\n",
+                {"verified": True, "strategy": "working-conf"},
+            )
+
+            # Первый запуск поиска: .bak ещё нет — создаётся.
+            _backup_auto_best(directory, keep_existing=True)
+
+            _write_pair(
+                directory,
+                "candidate1-conf\n",
+                {"verified": True, "strategy": "candidate1-conf"},
+            )
+
+            # Повторный поиск: .bak уже есть — должен остаться прежним.
+            _backup_auto_best(directory, keep_existing=True)
+
+            self.assertEqual(
+                (directory / AUTO_BEST_BACKUP_NAME).read_text(
+                    encoding="utf-8"
+                ),
+                "working-conf\n",
+            )
+            self.assertEqual(
+                json.loads(
+                    (directory / AUTO_BEST_META_BACKUP_NAME).read_text(
+                        encoding="utf-8"
+                    )
+                )["strategy"],
+                "working-conf",
+            )
+
+            # Без keep_existing поведение как раньше: бэкап перезаписывается.
+            _backup_auto_best(directory)
+            self.assertEqual(
+                (directory / AUTO_BEST_BACKUP_NAME).read_text(
+                    encoding="utf-8"
+                ),
+                "candidate1-conf\n",
+            )
+
+    def test_keep_existing_removes_backup_without_conf(self) -> None:
+        """Если conf удалён, устаревший бэкап убирается в обоих режимах."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            directory = Path(temp_dir)
+            _write_pair(
+                directory,
+                "old-conf\n",
+                {"verified": True, "strategy": "old-conf"},
+            )
+            _backup_auto_best(directory, keep_existing=True)
+            (directory / "auto_best.conf").unlink()
+
+            _backup_auto_best(directory, keep_existing=True)
+
+            self.assertFalse(
+                (directory / AUTO_BEST_BACKUP_NAME).exists()
+            )
+            self.assertFalse(
+                (directory / AUTO_BEST_META_BACKUP_NAME).exists()
+            )
+
 
 class ApplyAutoBestRollbackTests(unittest.TestCase):
     def test_hash_mismatch_restores_backup(self) -> None:
