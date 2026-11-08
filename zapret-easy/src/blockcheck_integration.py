@@ -81,49 +81,6 @@ AUTO_BEST_META_BACKUP_NAME: Final = f"{AUTO_BEST_META_NAME}.bak"
 AUTO_BEST_REPORT_NAME: Final = "auto_best.report.json"
 CHECK_CACHE_NAME: Final = "check_cache.json"
 CHECK_CACHE_TTL: Final = 24 * 60 * 60
-GOOGLE_DOMAINS: Final = (
-    "youtube.com",
-    "googlevideo.com",
-    "google.com",
-    "ytimg.com",
-)
-CLOUDFLARE_DOMAINS: Final = (
-    "cloudflare.com",
-    "cloudflare-ech.com",
-    "cloudflare-dns.com",
-    "discord.com",
-    "discord.gg",
-    "discordapp.com",
-    "discordapp.net",
-    "discordcdn.com",
-)
-AMAZON_DOMAINS: Final = (
-    "amazon.com",
-    "amazonaws.com",
-    "cloudfront.net",
-    "awsstatic.com",
-    "signin.aws.amazon.com",
-    "s3.amazonaws.com",
-    "twitch.tv",
-)
-OTHER_DOMAINS: Final = (
-    "github.com",
-    "githubusercontent.com",
-    "soundcloud.com",
-    "sndcdn.com",
-)
-STEAM_DOMAINS: Final = (
-    "steampowered.com",
-    "store.steampowered.com",
-    "login.steampowered.com",
-    "steamcommunity.com",
-    "api.steampowered.com",
-    "steamcontent.com",
-    "steamstatic.com",
-    "steamcdn-a.akamaihd.net",
-    "steamusercontent.com",
-    "steam-chat.com",
-)
 # Принудительные цели сканирования: инфраструктура YouTube/Discord,
 # Cloudflare и Amazon.  Steam/Twitch убраны: их CDN может резать трафик,
 # но сами домены при этом могут открываться.
@@ -227,16 +184,6 @@ class VerifiedCandidate:
     domains: dict[str, DomainCheckResult]
 
 
-@dataclass(frozen=True, slots=True)
-class DomainProfile:
-    """Итоговый профиль для группы доменов (Этап C)."""
-
-    domains: tuple[str, ...]
-    args: tuple[str, ...]
-    latency_ms: int | None
-    complexity: int
-
-
 # Стратегия -> домен -> результат check.
 CheckMatrix = dict[str, dict[str, DomainCheckResult]]
 
@@ -322,11 +269,22 @@ def _extract_strategies(stdout: str) -> list[str]:
     return list(dict.fromkeys(found))
 
 
-def _backup_auto_best(strategies_dir: Path) -> None:
+def _backup_auto_best(
+    strategies_dir: Path,
+    *,
+    keep_existing: bool = False,
+) -> None:
     """Сохраняет текущий auto_best.conf и meta перед заменой.
 
     Бэкап нужен для отката, если новый конфиг не пройдёт dry-run,
     служба не запустится или hash/meta окажутся неверными.
+
+    ``keep_existing=True`` защищает уже существующий .bak от перезаписи.
+    Без этого повторный поиск (или повторный вызов из apply) затирал бы
+    бэкап последним *кандидатом*, а не последним *рабочим* конфигом, и
+    откат терял исходное состояние.  Вызывающий код обязан обновить
+    бэкап на заведомо рабочий конфиг после успешного применения
+    (см. apply_auto_best()).
     """
     conf_path = strategies_dir / AUTO_BEST_NAME
     meta_path = strategies_dir / AUTO_BEST_META_NAME
@@ -334,8 +292,14 @@ def _backup_auto_best(strategies_dir: Path) -> None:
     meta_backup_path = strategies_dir / AUTO_BEST_META_BACKUP_NAME
 
     if not conf_path.is_file():
+        # Конфига нет — старый бэкап ссылается на удалённое состояние;
+        # в обоих режимах убираем его вместе с meta-бэкапом.
         backup_path.unlink(missing_ok=True)
         meta_backup_path.unlink(missing_ok=True)
+        return
+
+    if keep_existing and backup_path.is_file():
+        # Рабочий бэкап уже есть — не трогаем ни conf-бэкап, ни meta.
         return
 
     shutil.copy2(conf_path, backup_path)
@@ -376,8 +340,21 @@ def _save_strategy(
         strategy_line = _with_firewall_filters(strategy_line)
 
     config_text = strategy_line.rstrip("\n") + "\n"
+
+    # Защитная проверка: без firewall-фильтров derive_firewall_ports не
+    # соберёт правила и служба отклонит установку.  В нормальном flow
+    # фильтры добавляет _with_firewall_filters() (profiles=None) или
+    # compose_auto_best(); проверяем финальный текст на обоих путях.
+    if not re.search(r"--filter-(?:tcp|udp)=", config_text):
+        return (
+            False,
+            "В конфиге нет --filter-tcp/udp; auto_best.conf не изменён.",
+        )
+
     try:
-        _backup_auto_best(strategies_dir)
+        # keep_existing=True: повторный поиск не должен стирать бэкап
+        # последнего рабочего конфига кандидатом, который ещё не применён.
+        _backup_auto_best(strategies_dir, keep_existing=True)
         strategies_dir.mkdir(parents=True, exist_ok=True)
         fd, temp_name = tempfile.mkstemp(
             prefix=f".{AUTO_BEST_NAME}.",
@@ -453,26 +430,6 @@ def _common_command() -> list[str]:
         str(BLOCKCHECK_QNUM),
         "--nft-table",
         BLOCKCHECK_NFT_TABLE,
-    ]
-
-
-def _status_command(domain_list: str) -> list[str]:
-    """Чистая команда blockcheckw status через sudo -n."""
-    return [
-        *_common_command(),
-        "status",
-        "--domain-list",
-        domain_list,
-    ]
-
-
-def _universal_command(domain_list: str) -> list[str]:
-    """Чистая команда blockcheckw universal через sudo -n."""
-    return [
-        *_common_command(),
-        "universal",
-        "--domain-list",
-        domain_list,
     ]
 
 

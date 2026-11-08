@@ -13,9 +13,7 @@ from src.blockcheck_integration import (
     _common_command,
     _no_strategy_message,
     _scan_command,
-    _status_command,
     _sudo_auth_failed,
-    _universal_command,
 )
 
 
@@ -38,10 +36,8 @@ class SudoCommandTests(unittest.TestCase):
             common = _common_command()
             scan = _scan_command("youtube.com", 30)
             check = _check_command(Path("/tmp/report.json"), "youtube.com")
-            status = _status_command("/tmp/domains.txt")
-            universal = _universal_command("/tmp/domains.txt")
 
-        for command in (common, scan, check, status, universal):
+        for command in (common, scan, check):
             self.assertEqual(command[:2], ["sudo", "-n"])
             self.assertEqual(command[2], "/usr/bin/blockcheckw")
 
